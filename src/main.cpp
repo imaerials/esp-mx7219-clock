@@ -53,57 +53,69 @@ void scrollMessage();
 void setupAPI();
 void handleMessage();
 void handleStopScroll();
+void displayIPAddress(); // New prototype
+
+// Variables for IP display
+bool showingIP = false;
+String ipToShow = "";
 
 void setup() {
-  Serial.begin(115200);
-  
-  // Initialize the LED matrix
-  mx.begin();
-  
-  // Initialize all devices
-  for (int i = 0; i < MAX_DEVICES; i++) {
-    mx.control(i, MD_MAX72XX::INTENSITY, 1); // Set initial brightness (0-15)
-    mx.control(i, MD_MAX72XX::SHUTDOWN, false); // Ensure display is on
-    mx.control(i, MD_MAX72XX::DECODE, false); // No decode for digits
-  }
-  mx.clear();
-  // Display "WIFI" while connecting - adjusted positions for correct alignment
-  mx.setChar(31, 'W');  // Leftmost position (start of first module)
-  mx.setChar(23, 'I');  // Second character
-  mx.setChar(15, 'F');  // Third character
-  mx.setChar(7, 'I');   // Fourth character (rightmost)
-  mx.update();
-
-  // Initialize WiFiManager
-  WiFiManager wifiManager;
-  
-  // Uncomment to reset settings - remove all previously saved credentials
-  // wifiManager.resetSettings();
-  
-  // Set callback for entering configuration mode
-  wifiManager.setAPCallback([](WiFiManager* mgr) {
-    configMode = true;    mx.clear();
-    mx.setChar(31, 'C');  // Leftmost position (start of first module)
-    mx.setChar(23, 'O');  // Second character
-    mx.setChar(15, 'N');  // Third character
-    mx.setChar(7, 'F');   // Fourth character (rightmost)
+    Serial.begin(115200);
+    
+    // Initialize the LED matrix
+    mx.begin();
+    
+    // Initialize all devices
+    for (int i = 0; i < MAX_DEVICES; i++) {
+        mx.control(i, MD_MAX72XX::INTENSITY, 1); // Set initial brightness (0-15)
+        mx.control(i, MD_MAX72XX::SHUTDOWN, false); // Ensure display is on
+        mx.control(i, MD_MAX72XX::DECODE, false); // No decode for digits
+    }
+    mx.clear();
+    
+    // Display "WIFI" while connecting
+    mx.setChar(31, 'W');
+    mx.setChar(23, 'I');
+    mx.setChar(15, 'F');
+    mx.setChar(7, 'I');
     mx.update();
-  });
 
-  // Tries to connect to last known WiFi credentials
-  // Creates an access point named "Clock-Setup" if cannot connect
-  if (!wifiManager.autoConnect("Clock-Setup")) {
-    Serial.println("Failed to connect and hit timeout");
-    ESP.restart();
-  }  configMode = false;
-  timeClient.begin();
-  timeClient.setTimeOffset(-10800); // Argentina timezone (GMT-3 = -3 * 3600)
-  
-  // Setup API endpoints
-  setupAPI();
-  Serial.println("Web API started");
-  Serial.print("IP address: ");
-  Serial.println(WiFi.localIP());
+    // Initialize WiFiManager
+    WiFiManager wifiManager;
+    
+    // Set callback for entering configuration mode
+    wifiManager.setAPCallback([](WiFiManager* mgr) {
+        configMode = true;
+        mx.clear();
+        mx.setChar(31, 'C');
+        mx.setChar(23, 'O');
+        mx.setChar(15, 'N');
+        mx.setChar(7, 'F');
+        mx.update();
+    });
+
+    // Try to connect to WiFi
+    if (!wifiManager.autoConnect("Clock-Setup")) {
+        Serial.println("Failed to connect and hit timeout");
+        ESP.restart();
+    }
+    configMode = false;
+    
+    // Wait a moment for the connection to stabilize
+    delay(1000);
+    
+    // Display IP address once connected
+    displayIPAddress();
+    
+    // Initialize time client
+    timeClient.begin();
+    timeClient.setTimeOffset(-10800); // Argentina timezone (GMT-3)
+    
+    // Setup API endpoints
+    setupAPI();
+    Serial.println("Web API started");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
 }
 
 void loop() {
@@ -326,11 +338,12 @@ void scrollMessage() {
             scrollPosition = 0;
             scrollCount++;
             
-            // Reset after MAX_SCROLL_COUNT complete scrolls
-            if (scrollCount >= MAX_SCROLL_COUNT) {
+            // Reset after appropriate number of scrolls (1 for IP, MAX_SCROLL_COUNT for messages)
+            if ((showingIP && scrollCount >= 1) || (!showingIP && scrollCount >= MAX_SCROLL_COUNT)) {
                 isScrolling = false;
-                scrollCount = 0;
                 currentMessage = "";
+                showingIP = false;
+                scrollCount = 0;
             }
         }
         
@@ -390,4 +403,30 @@ void setupAPI() {
     });
     
     server.begin();
+}
+
+void displayIPAddress() {
+    if (ipToShow.isEmpty()) {
+        ipToShow = WiFi.localIP().toString();
+    }
+    
+    // Use the existing scroll mechanism
+    currentMessage = "IP: " + ipToShow;
+    scrollPosition = 0;
+    scrollCount = 0;
+    isScrolling = true;
+    showingIP = true;
+    
+    // Let it scroll through the message once
+    while (isScrolling) {
+        scrollMessage();
+        delay(SCROLL_DELAY);
+        
+        // Stop after one complete scroll
+        if (scrollCount >= 1) {
+            isScrolling = false;
+            currentMessage = "";
+            showingIP = false;
+        }
+    }
 }

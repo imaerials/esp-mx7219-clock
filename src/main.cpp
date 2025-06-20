@@ -5,11 +5,16 @@
 #include <WiFiManager.h>
 #include <WiFiUdp.h>
 #include <TimeLib.h>
+#include <ESP8266WebServer.h>
+#include <ArduinoJson.h>
 
 // Define pins for the LED matrix
 #define CLK_PIN   D5  // or GPIO14
 #define DATA_PIN  D7  // or GPIO13
 #define CS_PIN    D4  // or GPIO2
+
+// Scrolling message parameters
+#define SCROLL_DELAY 150  // Increased delay for slower scrolling (milliseconds)
 
 // Define matrix properties
 #define HARDWARE_TYPE MD_MAX72XX::FC16_HW
@@ -29,10 +34,25 @@ const long updateInterval = 1000; // Update every second
 bool showColon = true;
 bool configMode = false;
 
+// Message scrolling variables
+String currentMessage = "";
+bool isScrolling = false;
+int scrollPosition = 0;
+int scrollCount = 0;
+const int MAX_SCROLL_COUNT = 3;  // Number of times to scroll the message
+unsigned long lastScrollUpdate = 0;
+
+// Web Server
+ESP8266WebServer server(80);
+
 // Function prototypes
 void displayTime(int hours, int minutes);
 void displayError();
 void checkWiFiConnection();
+void scrollMessage();
+void setupAPI();
+void handleMessage();
+void handleStopScroll();
 
 void setup() {
   Serial.begin(115200);
@@ -75,13 +95,20 @@ void setup() {
   if (!wifiManager.autoConnect("Clock-Setup")) {
     Serial.println("Failed to connect and hit timeout");
     ESP.restart();
-  }
-  configMode = false;
+  }  configMode = false;
   timeClient.begin();
   timeClient.setTimeOffset(-10800); // Argentina timezone (GMT-3 = -3 * 3600)
+  
+  // Setup API endpoints
+  setupAPI();
+  Serial.println("Web API started");
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
 }
 
 void loop() {
+  server.handleClient();  // Handle API requests
+  
   if (WiFi.status() != WL_CONNECTED) {
     checkWiFiConnection();
     return;
@@ -89,7 +116,10 @@ void loop() {
 
   unsigned long currentMillis = millis();
   
-  if (currentMillis - lastUpdate >= updateInterval) {
+  // Handle scrolling message if active
+  if (isScrolling) {
+    scrollMessage();
+  } else if (currentMillis - lastUpdate >= updateInterval) {
     timeClient.update();
     
     int hours = timeClient.getHours();
@@ -98,14 +128,13 @@ void loop() {
     displayTime(hours, minutes);
     showColon = !showColon;
     lastUpdate = currentMillis;
-  }
-
-  // Add brightness control based on time of day
-  int currentHour = timeClient.getHours();
-  if (currentHour >= 22 || currentHour < 6) {
-    mx.control(MD_MAX72XX::INTENSITY, 0); // Dim at night
-  } else {
-    mx.control(MD_MAX72XX::INTENSITY, 3); // Brighter during the day
+    
+    // Add brightness control based on time of day
+    if (hours >= 22 || hours < 6) {
+      mx.control(MD_MAX72XX::INTENSITY, 0); // Dim at night
+    } else {
+      mx.control(MD_MAX72XX::INTENSITY, 3); // Brighter during the day
+    }
   }
 }
 
@@ -270,4 +299,95 @@ void checkWiFiConnection() {
     WiFi.begin();
     lastWiFiCheck = millis();
   }
+}
+
+// Function to scroll text
+void scrollMessage() {
+    if (!isScrolling || currentMessage.length() == 0) return;
+    
+    if (millis() - lastScrollUpdate >= SCROLL_DELAY) {
+        mx.clear();
+        
+        int charPosition = 31;  // Start from leftmost position
+        size_t messageIndex = static_cast<size_t>(scrollPosition);
+        
+        // Display as many characters as will fit
+        while (charPosition >= 0 && messageIndex < currentMessage.length()) {
+            mx.setChar(charPosition, currentMessage[messageIndex]);
+            charPosition -= 8;
+            messageIndex++;
+        }
+        
+        mx.update();
+        scrollPosition++;
+        
+        // Check if one complete scroll cycle is done
+        if (scrollPosition >= static_cast<int>(currentMessage.length() + MAX_DEVICES)) {
+            scrollPosition = 0;
+            scrollCount++;
+            
+            // Reset after MAX_SCROLL_COUNT complete scrolls
+            if (scrollCount >= MAX_SCROLL_COUNT) {
+                isScrolling = false;
+                scrollCount = 0;
+                currentMessage = "";
+            }
+        }
+        
+        lastScrollUpdate = millis();
+    }
+}
+
+// API endpoint handlers
+void handleMessage() {
+    if (server.hasArg("plain")) {
+        StaticJsonDocument<200> doc;
+        DeserializationError error = deserializeJson(doc, server.arg("plain"));
+        
+        if (error) {
+            server.send(400, "text/plain", "Invalid JSON");
+            return;
+        }
+        
+        if (doc.containsKey("message")) {
+            currentMessage = doc["message"].as<String>();
+            scrollPosition = 0;
+            scrollCount = 0;
+            isScrolling = true;
+            
+            String response = "{\"status\":\"success\",\"message\":\"" + currentMessage + "\",\"scrolls\":\"" + String(MAX_SCROLL_COUNT) + "\"}";
+            server.send(200, "application/json", response);
+        } else {
+            server.send(400, "text/plain", "Missing message parameter");
+        }
+    } else {
+        server.send(400, "text/plain", "No message provided");
+    }
+}
+
+void handleStopScroll() {
+    isScrolling = false;
+    currentMessage = "";
+    mx.clear();
+    mx.update();
+    server.send(200, "text/plain", "Scrolling stopped");
+}
+
+void setupAPI() {
+    // API endpoints
+    server.on("/api/message", HTTP_POST, handleMessage);
+    server.on("/api/stop", HTTP_POST, handleStopScroll);
+    
+    // Simple status endpoint
+    server.on("/api/status", HTTP_GET, []() {
+        StaticJsonDocument<200> doc;
+        doc["scrolling"] = isScrolling;
+        doc["message"] = currentMessage;
+        
+        String response;
+        serializeJson(doc, response);
+        server.send(200, "application/json", response);
+    });
+    
+    server.begin();
 }

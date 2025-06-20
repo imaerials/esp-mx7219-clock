@@ -47,12 +47,12 @@ void setup() {
     mx.control(i, MD_MAX72XX::DECODE, false); // No decode for digits
   }
   mx.clear();
-
-  // Display "WIFI" while connecting
-  mx.setChar(24, 'W');
-  mx.setChar(16, 'I');
-  mx.setChar(8, 'F');
-  mx.setChar(0, 'I');
+  // Display "WIFI" while connecting - adjusted positions for correct alignment
+  mx.setChar(31, 'W');  // Leftmost position (start of first module)
+  mx.setChar(23, 'I');  // Second character
+  mx.setChar(15, 'F');  // Third character
+  mx.setChar(7, 'I');   // Fourth character (rightmost)
+  mx.update();
 
   // Initialize WiFiManager
   WiFiManager wifiManager;
@@ -62,12 +62,12 @@ void setup() {
   
   // Set callback for entering configuration mode
   wifiManager.setAPCallback([](WiFiManager* mgr) {
-    configMode = true;
-    mx.clear();
-    mx.setChar(24, 'C');
-    mx.setChar(16, 'O');
-    mx.setChar(8, 'N');
-    mx.setChar(0, 'F');
+    configMode = true;    mx.clear();
+    mx.setChar(31, 'C');  // Leftmost position (start of first module)
+    mx.setChar(23, 'O');  // Second character
+    mx.setChar(15, 'N');  // Third character
+    mx.setChar(7, 'F');   // Fourth character (rightmost)
+    mx.update();
   });
 
   // Tries to connect to last known WiFi credentials
